@@ -1,121 +1,254 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+
+import { useRef, useState } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
 import './App.css'
 
+type Tool = 'select' | 'text'
+
 function App() {
-  const [count, setCount] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [activeTool, setActiveTool] = useState<Tool>('select')
+  const [isDragging, setIsDragging] = useState(false)
+  const [error, setError] = useState('')
+
+  function loadFile(file: File | undefined) {
+    if (!file) return
+
+    if (
+      file.type !== 'application/pdf' &&
+      !file.name.toLowerCase().endsWith('.pdf')
+    ) {
+      setError('Please select a PDF file.')
+      return
+    }
+
+    setError('')
+    setSelectedFile(file)
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    loadFile(event.target.files?.[0])
+    event.target.value = ''
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setIsDragging(false)
+    loadFile(event.dataTransfer.files[0])
+  }
+
+  function openFilePicker() {
+    fileInputRef.current?.click()
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <main className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="Pagecraft home">
+          <span className="brand-icon">P</span>
+          <span>pagecraft</span>
+        </a>
+
+        <div className="topbar-center">
+          <span className="document-name">
+            {selectedFile ? selectedFile.name : 'Untitled document'}
+          </span>
+          <span className="save-status">
+            <span className="status-dot" />
+            {selectedFile ? 'PDF loaded locally' : 'Ready to start'}
+          </span>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
+
+        <button className="button button-primary" onClick={openFilePicker}>
+          <span aria-hidden="true">↑</span>
+          Open PDF
         </button>
-      </section>
 
-      <div className="ticks"></div>
+        <input
+          ref={fileInputRef}
+          className="visually-hidden"
+          type="file"
+          accept="application/pdf,.pdf"
+          onChange={handleFileChange}
+        />
+      </header>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      <div className="editor-layout">
+        <aside className="sidebar">
+          <div className="sidebar-heading">TOOLS</div>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <button
+            className={`tool-button ${activeTool === 'select' ? 'active' : ''}`}
+            onClick={() => setActiveTool('select')}
+            aria-pressed={activeTool === 'select'}
+          >
+            <span className="tool-icon" aria-hidden="true">↖</span>
+            <span>Select</span>
+            <span className="tool-shortcut">V</span>
+          </button>
+
+          <button
+            className={`tool-button ${activeTool === 'text' ? 'active' : ''}`}
+            onClick={() => setActiveTool('text')}
+            aria-pressed={activeTool === 'text'}
+          >
+            <span className="tool-icon text-icon" aria-hidden="true">T</span>
+            <span>Add text</span>
+            <span className="tool-shortcut">Ctrl T</span>
+          </button>
+
+          <div className="sidebar-divider" />
+
+          <div className="sidebar-heading">DOCUMENT</div>
+
+          <div className="sidebar-info">
+            <span className="info-icon" aria-hidden="true">▤</span>
+            <div>
+              <strong>{selectedFile ? 'PDF selected' : 'No document'}</strong>
+              <p>
+                {selectedFile
+                  ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`
+                  : 'Upload a PDF to begin'}
+              </p>
+            </div>
+          </div>
+
+          <div className="sidebar-tip">
+            <span aria-hidden="true">✳</span>
+            <strong>Quick tip</strong>
+            <p>
+              {activeTool === 'text'
+                ? 'Once a PDF is open, use Ctrl + T to quickly create text boxes.'
+                : 'Choose Add text to prepare for placing text on your document.'}
+            </p>
+          </div>
+        </aside>
+
+        <section className="workspace">
+          <div className="workspace-toolbar">
+            <div className="workspace-breadcrumb">
+              <span>Workspace</span>
+              <span className="breadcrumb-separator">/</span>
+              <strong>
+                {selectedFile ? selectedFile.name : 'No document open'}
+              </strong>
+            </div>
+
+            <div className="zoom-control">
+              <span>−</span>
+              <span>100%</span>
+              <span>+</span>
+            </div>
+          </div>
+
+          <div
+            className={`canvas-area ${isDragging ? 'dragging' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault()
+              setIsDragging(true)
+            }}
+            onDragLeave={(event) => {
+              if (
+                !event.currentTarget.contains(
+                  event.relatedTarget as Node | null,
+                )
+              ) {
+                setIsDragging(false)
+              }
+            }}
+            onDrop={handleDrop}
+          >
+            {selectedFile ? (
+              <div className="empty-document">
+                <div className="pdf-preview-icon">PDF</div>
+                <h2>Your document is ready</h2>
+                <p>
+                  <strong>{selectedFile.name}</strong> has been selected.
+                </p>
+                <p className="muted">
+                  PDF page rendering is our next step.
+                </p>
+                <button
+                  className="button button-secondary"
+                  onClick={openFilePicker}
+                >
+                  Choose another PDF
+                </button>
+              </div>
+            ) : (
+              <div className="upload-card">
+                <div className="upload-icon">
+                  <svg
+                    viewBox="0 0 48 48"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M12 5.5h16l9 9v27H12a3 3 0 0 1-3-3v-30a3 3 0 0 1 3-3Z"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M28 5.5v10h9M24 33V21m-5 5 5-5 5 5"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </div>
+
+                <h1>Your PDF, your way.</h1>
+                <p className="upload-description">
+                  Add text anywhere on your document.
+                  <br />
+                  Simple, fast, and entirely in your browser.
+                </p>
+
+                <button
+                  className="button button-primary upload-button"
+                  onClick={openFilePicker}
+                >
+                  <span aria-hidden="true">↑</span>
+                  Choose a PDF
+                </button>
+
+                <p className="file-hint">
+                  or drag and drop a PDF here
+                </p>
+
+                {isDragging && (
+                  <p className="drop-message">
+                    Drop your PDF to open it
+                  </p>
+                )}
+
+                <div className="privacy-note">
+                  <span aria-hidden="true">♧</span>
+                  Your files stay on your device
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="error-message" role="alert">
+                {error}
+              </div>
+            )}
+          </div>
+
+          <footer className="statusbar">
+            <span>
+              <span className="status-dot" />
+              All changes stay local
+            </span>
+            <span>PDF Text Editor · Preview build</span>
+          </footer>
+        </section>
+      </div>
+    </main>
   )
 }
 
