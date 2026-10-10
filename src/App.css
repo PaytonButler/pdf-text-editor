@@ -233,7 +233,7 @@
 }
 
 .sidebar-info p {
-  margin: 0;
+  margin: 0 0 4px;
   color: #96978c;
   font-size: 11px;
 }
@@ -425,7 +425,10 @@
 }
 
 .pdf-page {
+  position: relative;
+  flex: 0 0 auto;
   max-width: 100%;
+  overflow: visible;
   background: white;
   box-shadow: 0 3px 14px rgb(0 0 0 / 12%);
 }
@@ -481,6 +484,105 @@
   display: flex;
   align-items: center;
   gap: 7px;
+}
+
+/* Independent text-box overlay */
+
+.text-placement-mode {
+  cursor: crosshair;
+}
+
+.text-box-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.text-box {
+  position: absolute;
+  z-index: 1;
+  width: 190px;
+  max-width: 80%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  pointer-events: auto;
+}
+
+.text-box:hover,
+.text-box.selected {
+  background: rgb(255 255 255 / 18%);
+  border-color: rgb(102 125 87 / 75%);
+}
+
+.text-box-drag-handle {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  width: 100%;
+  height: 7px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.text-box-drag-handle:active {
+  cursor: grabbing;
+}
+
+.text-box-delete {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  z-index: 3;
+  display: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  place-items: center;
+  color: #45463e;
+  background: #fff;
+  border: 1px solid #d8d9d0;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.text-box:hover .text-box-delete,
+.text-box.selected .text-box-delete {
+  display: grid;
+}
+
+.text-box-input {
+  display: block;
+  width: 100%;
+  min-height: 25px;
+  padding: 2px 3px;
+  color: #252621;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  resize: both;
+  font-family: Arial, sans-serif;
+  line-height: 1.25;
+}
+
+.text-box-input::placeholder {
+  color: transparent;
+}
+
+.text-box:hover .text-box-input::placeholder,
+.text-box.selected .text-box-input::placeholder {
+  color: #a2a39a;
+}
+
+.text-box-input:focus {
+  outline: none;
 }
 
 @media (max-width: 760px) {
