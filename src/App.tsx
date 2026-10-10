@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import type {
   ChangeEvent,
   DragEvent,
@@ -16,6 +21,7 @@ type Tool = 'select' | 'text'
 
 type TextBox = {
   id: number
+  pageNumber: number
   x: number
   y: number
   width: number
@@ -27,6 +33,7 @@ type TextBox = {
 
 type DragStart = {
   id: number
+  pageNumber: number
   pointerX: number
   pointerY: number
   boxX: number
@@ -35,19 +42,94 @@ type DragStart = {
 
 type ResizeStart = {
   id: number
+  pageNumber: number
   pointerX: number
   pointerY: number
   width: number
   height: number
 }
 
+type PdfPageProps = {
+  pdf: pdfjsLib.PDFDocumentProxy
+  pageNumber: number
+  onPageReady: (pageNumber: number, width: number, height: number) => void
+}
+
+function PdfPageCanvas({ pdf, pageNumber, onPageReady }: PdfPageProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [renderError, setRenderError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let renderTask: pdfjsLib.RenderTask | undefined
+
+    async function renderPage() {
+      try {
+        setRenderError('')
+
+        const page = await pdf.getPage(pageNumber)
+        if (cancelled) return
+
+        const scale = 1.25
+        const viewport = page.getViewport({ scale })
+        const canvas = canvasRef.current
+        const context = canvas?.getContext('2d')
+
+        if (!canvas || !context) {
+          throw new Error('Could not create the PDF canvas.')
+        }
+
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+
+        onPageReady(pageNumber, viewport.width, viewport.height)
+
+        renderTask = page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+        })
+
+        await renderTask.promise
+      } catch (error) {
+        if (!cancelled) {
+          console.error(`Could not render PDF page ${pageNumber}:`, error)
+          setRenderError('This page could not be displayed.')
+        }
+      }
+    }
+
+    void renderPage()
+
+    return () => {
+      cancelled = true
+      renderTask?.cancel()
+    }
+  }, [pdf, pageNumber, onPageReady])
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        className="pdf-canvas"
+        aria-label={`PDF page ${pageNumber}`}
+      />
+      {renderError && (
+        <div className="page-render-error">{renderError}</div>
+      )}
+    </>
+  )
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const pageRef = useRef<HTMLDivElement>(null)
   const nextTextBoxId = useRef(1)
+  const pageElements = useRef<Map<number, HTMLDivElement>>(new Map())
+  const pageNavigationInput = useRef<HTMLInputElement>(null)
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [pdfDocument, setPdfDocument] =
+    useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [activeTool, setActiveTool] = useState<Tool>('select')
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState('')
@@ -58,27 +140,84 @@ function App() {
   const [dragStart, setDragStart] = useState<DragStart | null>(null)
   const [resizeStart, setResizeStart] = useState<ResizeStart | null>(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [pageToJump, setPageToJump] = useState('1')
+  const [pageDimensions, setPageDimensions] = useState<
+    Record<number, { width: number; height: number }>
+  >({})
 
-  const addTextBox = useCallback((x?: number, y?: number) => {
-    const id = nextTextBoxId.current++
-    const offset = (id - 1) % 10
+  const addTextBox = useCallback(
+    (pageNumber: number, x?: number, y?: number) => {
+      const id = nextTextBoxId.current++
+      const offset = (id - 1) % 10
 
-    const newBox: TextBox = {
-      id,
-      x: Math.max(0, Math.min(85, x ?? 8 + offset * 3)),
-      y: Math.max(0, Math.min(90, y ?? 8 + offset * 4)),
-      width: 190,
-      height: 58,
-      text: '',
-      fontSize: 15,
-      activated: false,
-    }
+      const newBox: TextBox = {
+        id,
+        pageNumber,
+        x: Math.max(0, Math.min(85, x ?? 8 + offset * 3)),
+        y: Math.max(0, Math.min(90, y ?? 8 + offset * 4)),
+        width: 190,
+        height: 58,
+        text: '',
+        fontSize: 15,
+        activated: false,
+      }
 
-    setTextBoxes((current) => [...current, newBox])
-    setSelectedBoxId(id)
-  }, [])
+      setTextBoxes((current) => [...current, newBox])
+      setSelectedBoxId(id)
+    },
+    [],
+  )
+
+  const registerPageElement = useCallback(
+    (pageNumber: number, element: HTMLDivElement | null) => {
+      if (element) {
+        pageElements.current.set(pageNumber, element)
+      } else {
+        pageElements.current.delete(pageNumber)
+      }
+    },
+    [],
+  )
+
+  const handlePageReady = useCallback(
+    (pageNumber: number, width: number, height: number) => {
+      setPageDimensions((current) => {
+        const previous = current[pageNumber]
+
+        if (previous?.width === width && previous?.height === height) {
+          return current
+        }
+
+        return {
+          ...current,
+          [pageNumber]: { width, height },
+        }
+      })
+    },
+    [],
+  )
 
   useEffect(() => {
+    function getVisiblePageNumber() {
+      const viewportCenter = window.innerHeight / 2
+      let closestPage = 1
+      let closestDistance = Number.POSITIVE_INFINITY
+
+      for (const [pageNumber, element] of pageElements.current.entries()) {
+        const rect = element.getBoundingClientRect()
+        const distance = Math.abs(
+          (rect.top + rect.bottom) / 2 - viewportCenter,
+        )
+
+        if (distance < closestDistance) {
+          closestDistance = distance
+          closestPage = pageNumber
+        }
+      }
+
+      return closestPage
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       const key = event.key.toLowerCase()
       const target = event.target as HTMLElement | null
@@ -88,16 +227,16 @@ function App() {
         target?.tagName === 'INPUT' ||
         target?.isContentEditable
 
-      const isTextShortcut =
-        (event.ctrlKey || event.metaKey) && key === 't'
-
-      const isAlternativeShortcut =
+      const ctrlT = (event.ctrlKey || event.metaKey) && key === 't'
+      const altT =
         event.altKey && !event.ctrlKey && !event.metaKey && key === 't'
 
-      if ((isTextShortcut || isAlternativeShortcut) && !isTyping) {
+      if ((ctrlT || altT) && !isTyping && selectedFile) {
         event.preventDefault()
         event.stopPropagation()
-        addTextBox()
+
+        const pageNumber = getVisiblePageNumber()
+        addTextBox(pageNumber)
       }
 
       if (event.key === 'Escape') {
@@ -106,8 +245,11 @@ function App() {
     }
 
     window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [addTextBox])
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+    }
+  }, [addTextBox, selectedFile])
 
   function loadFile(file: File | undefined) {
     if (!file) return
@@ -121,7 +263,12 @@ function App() {
     }
 
     setError('')
+    setRenderError('')
     setSelectedFile(file)
+    setPdfDocument(null)
+    setPageCount(0)
+    setPageDimensions({})
+    setPageToJump('1')
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -139,20 +286,75 @@ function App() {
     fileInputRef.current?.click()
   }
 
-  function handlePageClick(event: MouseEvent<HTMLDivElement>) {
+  useEffect(() => {
+    if (!selectedFile) {
+      setPdfDocument(null)
+      setPageCount(0)
+      return
+    }
+
+    const file = selectedFile
+    let cancelled = false
+    let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | undefined
+
+    async function loadPdf() {
+      try {
+        setRenderError('')
+
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        if (cancelled) return
+
+        loadingTask = pdfjsLib.getDocument({ data: bytes })
+
+        const pdf = await loadingTask.promise
+        if (cancelled) return
+
+        setPdfDocument(pdf)
+        setPageCount(pdf.numPages)
+        setPageToJump('1')
+      } catch (loadError) {
+        if (!cancelled) {
+          console.error('PDF loading failed:', loadError)
+          setRenderError('Could not open this PDF. Try another PDF file.')
+        }
+      }
+    }
+
+    void loadPdf()
+
+    return () => {
+      cancelled = true
+      void loadingTask?.destroy()
+    }
+  }, [selectedFile])
+
+  useEffect(() => {
+    setTextBoxes([])
+    setSelectedBoxId(null)
+    setDragStart(null)
+    setResizeStart(null)
+    nextTextBoxId.current = 1
+  }, [selectedFile])
+
+  function handlePageClick(
+    pageNumber: number,
+    event: MouseEvent<HTMLDivElement>,
+  ) {
     if (activeTool !== 'text') return
 
     const target = event.target as HTMLElement
     if (target.closest('.text-box')) return
 
-    const page = pageRef.current
+    const page = pageElements.current.get(pageNumber)
     if (!page) return
 
     const rect = page.getBoundingClientRect()
-    const x = ((event.clientX - rect.left) / rect.width) * 100
-    const y = ((event.clientY - rect.top) / rect.height) * 100
 
-    addTextBox(x, y)
+    addTextBox(
+      pageNumber,
+      ((event.clientX - rect.left) / rect.width) * 100,
+      ((event.clientY - rect.top) / rect.height) * 100,
+    )
   }
 
   function handleDragStart(
@@ -164,8 +366,10 @@ function App() {
     event.currentTarget.setPointerCapture(event.pointerId)
 
     setSelectedBoxId(box.id)
+
     setDragStart({
       id: box.id,
+      pageNumber: box.pageNumber,
       pointerX: event.clientX,
       pointerY: event.clientY,
       boxX: box.x,
@@ -175,39 +379,41 @@ function App() {
 
   function handleDragMove(
     event: PointerEvent<HTMLDivElement>,
-    boxId: number,
+    box: TextBox,
   ) {
-    if (!dragStart || dragStart.id !== boxId) return
+    if (!dragStart || dragStart.id !== box.id) return
 
-    const page = pageRef.current
+    const page = pageElements.current.get(box.pageNumber)
     if (!page) return
 
     const rect = page.getBoundingClientRect()
-    const deltaX = ((event.clientX - dragStart.pointerX) / rect.width) * 100
-    const deltaY = ((event.clientY - dragStart.pointerY) / rect.height) * 100
+    const deltaX =
+      ((event.clientX - dragStart.pointerX) / rect.width) * 100
+    const deltaY =
+      ((event.clientY - dragStart.pointerY) / rect.height) * 100
 
     setTextBoxes((current) =>
-      current.map((box) =>
-        box.id === boxId
-          ? {
-            ...box,
-            x: Math.max(
-              0,
-              Math.min(
-                100 - (box.width / rect.width) * 100,
-                dragStart.boxX + deltaX,
-              ),
+      current.map((item) => {
+        if (item.id !== box.id) return item
+
+        return {
+          ...item,
+          x: Math.max(
+            0,
+            Math.min(
+              100 - (item.width / rect.width) * 100,
+              dragStart.boxX + deltaX,
             ),
-            y: Math.max(
-              0,
-              Math.min(
-                100 - (box.height / rect.height) * 100,
-                dragStart.boxY + deltaY,
-              ),
+          ),
+          y: Math.max(
+            0,
+            Math.min(
+              100 - (item.height / rect.height) * 100,
+              dragStart.boxY + deltaY,
             ),
-          }
-          : box,
-      ),
+          ),
+        }
+      }),
     )
   }
 
@@ -220,8 +426,10 @@ function App() {
     event.currentTarget.setPointerCapture(event.pointerId)
 
     setSelectedBoxId(box.id)
+
     setResizeStart({
       id: box.id,
+      pageNumber: box.pageNumber,
       pointerX: event.clientX,
       pointerY: event.clientY,
       width: box.width,
@@ -231,34 +439,37 @@ function App() {
 
   function handleResizeMove(
     event: PointerEvent<HTMLDivElement>,
-    boxId: number,
+    box: TextBox,
   ) {
-    if (!resizeStart || resizeStart.id !== boxId) return
+    if (!resizeStart || resizeStart.id !== box.id) return
 
-    const page = pageRef.current
+    const page = pageElements.current.get(box.pageNumber)
     if (!page) return
 
     const rect = page.getBoundingClientRect()
-    const deltaX = event.clientX - resizeStart.pointerX
-    const deltaY = event.clientY - resizeStart.pointerY
-    const maxWidth = Math.max(80, rect.width * 0.8)
 
     setTextBoxes((current) =>
-      current.map((box) =>
-        box.id === boxId
-          ? {
-            ...box,
-            width: Math.max(
-              90,
-              Math.min(maxWidth, resizeStart.width + deltaX),
+      current.map((item) => {
+        if (item.id !== box.id) return item
+
+        return {
+          ...item,
+          width: Math.max(
+            90,
+            Math.min(
+              rect.width * 0.8,
+              resizeStart.width + event.clientX - resizeStart.pointerX,
             ),
-            height: Math.max(
-              38,
-              Math.min(rect.height, resizeStart.height + deltaY),
+          ),
+          height: Math.max(
+            38,
+            Math.min(
+              rect.height,
+              resizeStart.height + event.clientY - resizeStart.pointerY,
             ),
-          }
-          : box,
-      ),
+          ),
+        }
+      }),
     )
   }
 
@@ -272,6 +483,7 @@ function App() {
 
   function activateTextBox(id: number) {
     setSelectedBoxId(id)
+
     setTextBoxes((current) =>
       current.map((box) =>
         box.id === id ? { ...box, activated: true } : box,
@@ -287,103 +499,50 @@ function App() {
     if (resizeStart?.id === id) setResizeStart(null)
   }
 
-  useEffect(() => {
-    setTextBoxes([])
-    setSelectedBoxId(null)
-    setDragStart(null)
-    setResizeStart(null)
-    nextTextBoxId.current = 1
-  }, [selectedFile])
+  function jumpToPage() {
+    const parsed = Number.parseInt(pageToJump, 10)
 
-  useEffect(() => {
-    if (!selectedFile) {
-      setPageCount(0)
-      setRenderError('')
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > pageCount) {
+      setError(`Enter a page number from 1 to ${pageCount}.`)
       return
     }
 
-    let cancelled = false
-    let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | undefined
-
-    async function renderPdf() {
-      try {
-        setRenderError('')
-        setPageCount(0)
-
-        const file = selectedFile
-        if (!file) return
-
-        const bytes = new Uint8Array(await file.arrayBuffer())
-        if (cancelled) return
-
-        loadingTask = pdfjsLib.getDocument({ data: bytes })
-        const pdf = await loadingTask.promise
-        if (cancelled) return
-
-        setPageCount(pdf.numPages)
-
-        const page = await pdf.getPage(1)
-        if (cancelled) return
-
-        const canvas = canvasRef.current
-        const context = canvas?.getContext('2d')
-
-        if (!canvas || !context) {
-          throw new Error('Could not create the PDF canvas.')
-        }
-
-        const viewport = page.getViewport({ scale: 1.25 })
-        canvas.width = Math.ceil(viewport.width)
-        canvas.height = Math.ceil(viewport.height)
-
-        await page.render({
-          canvas,
-          canvasContext: context,
-          viewport,
-        }).promise
-      } catch (err) {
-        if (!cancelled) {
-          console.error('PDF rendering failed:', err)
-          setRenderError('Could not display this PDF. Try another PDF file.')
-        }
-      }
-    }
-
-    void renderPdf()
-
-    return () => {
-      cancelled = true
-      void loadingTask?.destroy()
-    }
-  }, [selectedFile])
+    setError('')
+    pageElements.current
+      .get(parsed)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   async function exportPdf() {
-    if (!selectedFile || isExporting) return
+    const file = selectedFile
+    if (!file || isExporting) return
 
     setIsExporting(true)
     setError('')
 
     try {
-      const bytes = new Uint8Array(await selectedFile.arrayBuffer())
+      const bytes = new Uint8Array(await file.arrayBuffer())
       const pdfDoc = await PDFDocument.load(bytes)
-      const page = pdfDoc.getPage(0)
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
-      const pageElement = pageRef.current
-      const pageRect = pageElement?.getBoundingClientRect()
-
-      if (!page || !pageRect || pageRect.height <= 0) {
-        throw new Error('The PDF page is not ready to export.')
-      }
-
-      const pageSize = page.getSize()
-      const pointsPerCssPixel = pageSize.height / pageRect.height
-      const padding = 3 * pointsPerCssPixel
 
       for (const box of textBoxes) {
         if (!box.text.trim()) continue
 
+        const page = pdfDoc.getPage(box.pageNumber - 1)
+        const pageElement = pageElements.current.get(box.pageNumber)
+        if (!pageElement) continue
+
+        const rect = pageElement.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) continue
+
+        const pageSize = page.getSize()
+        const pointsPerCssPixel = pageSize.height / rect.height
+        const padding = 3 * pointsPerCssPixel
         const fontSize = Math.max(1, box.fontSize * pointsPerCssPixel)
-        const boxWidth = box.width * pointsPerCssPixel - padding * 2
+        const boxWidth = Math.max(
+          1,
+          box.width * pointsPerCssPixel - padding * 2,
+        )
         const lineHeight = fontSize * 1.25
         const lines: string[] = []
 
@@ -440,21 +599,25 @@ function App() {
       })
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
-      const baseName = selectedFile.name.replace(/\.pdf$/i, '')
+      const baseName = file.name.replace(/\.pdf$/i, '')
 
       link.href = url
       link.download = `${baseName}-edited.pdf`
       document.body.appendChild(link)
       link.click()
       link.remove()
-      URL.revokeObjectURL(url)
-    } catch (err) {
-      console.error('PDF export failed:', err)
-      setError('Could not export this PDF. Try another file.')
+
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (exportError) {
+      console.error('PDF export failed:', exportError)
+      setError('Could not export this PDF. Try another PDF file.')
     } finally {
       setIsExporting(false)
     }
   }
+
+  const textBoxCountForPage = (pageNumber: number) =>
+    textBoxes.filter((box) => box.pageNumber === pageNumber).length
 
   return (
     <main className="app-shell">
@@ -479,7 +642,7 @@ function App() {
             <button
               className="button button-primary"
               onClick={exportPdf}
-              disabled={isExporting}
+              disabled={isExporting || !pdfDocument}
             >
               <span aria-hidden="true">↓</span>
               {isExporting ? 'Exporting...' : 'Export PDF'}
@@ -540,21 +703,45 @@ function App() {
                   : 'Upload a PDF to begin'}
               </p>
               {selectedFile && (
-                <p>
-                  {textBoxes.length} text box
-                  {textBoxes.length === 1 ? '' : 'es'}
-                </p>
+                <p>{pageCount} pages · {textBoxes.length} text boxes</p>
               )}
             </div>
           </div>
+
+          {selectedFile && pageCount > 0 && (
+            <div className="page-jump">
+              <label htmlFor="page-jump-input">GO TO PAGE</label>
+              <div className="page-jump-row">
+                <input
+                  ref={pageNavigationInput}
+                  id="page-jump-input"
+                  type="number"
+                  min={1}
+                  max={pageCount}
+                  value={pageToJump}
+                  onChange={(event) => setPageToJump(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') jumpToPage()
+                  }}
+                />
+                <span>of {pageCount}</span>
+                <button
+                  className="button button-secondary page-jump-button"
+                  onClick={jumpToPage}
+                >
+                  Go
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="sidebar-tip">
             <span aria-hidden="true">✳</span>
             <strong>Quick tip</strong>
             <p>
               {activeTool === 'text'
-                ? 'Click the page to place text. Press Alt + T to create more boxes.'
-                : 'Choose Add text to place text on your document.'}
+                ? 'Click any page to place text. Press Alt + T to add a box to the page nearest the center of your screen.'
+                : 'Scroll through the whole document, or use Go to Page to jump directly.'}
             </p>
           </div>
         </aside>
@@ -569,11 +756,11 @@ function App() {
               </strong>
             </div>
 
-            <div className="zoom-control">
-              <span>−</span>
-              <span>100%</span>
-              <span>+</span>
-            </div>
+            {selectedFile && pageCount > 0 && (
+              <div className="document-count">
+                {pageCount} {pageCount === 1 ? 'page' : 'pages'} · continuous view
+              </div>
+            )}
           </div>
 
           <div
@@ -599,107 +786,128 @@ function App() {
                   <div className="pdf-render-error" role="alert">
                     {renderError}
                   </div>
-                ) : (
-                  <>
+                ) : pdfDocument ? (
+                  Array.from(
+                    { length: pageCount },
+                    (_, index) => index + 1,
+                  ).map((pageNumber) => (
                     <div
-                      ref={pageRef}
-                      className={`pdf-page ${activeTool === 'text' ? 'text-placement-mode' : ''}`}
-                      onClick={handlePageClick}
+                      className="pdf-page-wrap"
+                      key={`${selectedFile.name}-${pageNumber}`}
                     >
-                      <canvas
-                        ref={canvasRef}
-                        className="pdf-canvas"
-                        aria-label="First page of the selected PDF"
-                      />
+                      <div
+                        ref={(element) =>
+                          registerPageElement(pageNumber, element)
+                        }
+                        className={`pdf-page ${activeTool === 'text' ? 'text-placement-mode' : ''}`}
+                        onClick={(event) =>
+                          handlePageClick(pageNumber, event)
+                        }
+                        data-page-number={pageNumber}
+                        data-rendered-width={pageDimensions[pageNumber]?.width}
+                        data-rendered-height={pageDimensions[pageNumber]?.height}
+                      >
+                        <PdfPageCanvas
+                          pdf={pdfDocument}
+                          pageNumber={pageNumber}
+                          onPageReady={handlePageReady}
+                        />
 
-                      <div className="text-box-layer">
-                        {textBoxes.map((box) => (
-                          <div
-                            key={box.id}
-                            className={[
-                              'text-box',
-                              box.activated ? 'activated' : 'unactivated',
-                              selectedBoxId === box.id ? 'selected' : '',
-                            ].filter(Boolean).join(' ')}
-                            style={{
-                              left: `${box.x}%`,
-                              top: `${box.y}%`,
-                              width: `${box.width}px`,
-                              height: `${box.height}px`,
-                            }}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setSelectedBoxId(box.id)
-                            }}
-                          >
-                            <div
-                              className="text-box-drag-handle"
-                              title="Drag to move this text box"
-                              onPointerDown={(event) =>
-                                handleDragStart(event, box)
-                              }
-                              onPointerMove={(event) =>
-                                handleDragMove(event, box.id)
-                              }
-                              onPointerUp={() => setDragStart(null)}
-                              onPointerCancel={() => setDragStart(null)}
-                            />
+                        <div className="text-box-layer">
+                          {textBoxes
+                            .filter((box) => box.pageNumber === pageNumber)
+                            .map((box) => (
+                              <div
+                                key={box.id}
+                                className={[
+                                  'text-box',
+                                  box.activated ? 'activated' : 'unactivated',
+                                  selectedBoxId === box.id ? 'selected' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                                style={{
+                                  left: `${box.x}%`,
+                                  top: `${box.y}%`,
+                                  width: `${box.width}px`,
+                                  height: `${box.height}px`,
+                                }}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  setSelectedBoxId(box.id)
+                                }}
+                              >
+                                <div
+                                  className="text-box-drag-handle"
+                                  title="Drag to move this text box"
+                                  onPointerDown={(event) =>
+                                    handleDragStart(event, box)
+                                  }
+                                  onPointerMove={(event) =>
+                                    handleDragMove(event, box)
+                                  }
+                                  onPointerUp={() => setDragStart(null)}
+                                  onPointerCancel={() => setDragStart(null)}
+                                />
 
-                            <button
-                              type="button"
-                              className="text-box-delete"
-                              aria-label={`Delete text box ${box.id}`}
-                              title="Delete text box"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                deleteTextBox(box.id)
-                              }}
-                            >
-                              ×
-                            </button>
+                                <button
+                                  type="button"
+                                  className="text-box-delete"
+                                  aria-label={`Delete text box ${box.id}`}
+                                  title="Delete text box"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    deleteTextBox(box.id)
+                                  }}
+                                >
+                                  ×
+                                </button>
 
-                            <textarea
-                              className="text-box-input"
-                              aria-label={`Text box ${box.id} content`}
-                              placeholder="Type here..."
-                              value={box.text}
-                              rows={2}
-                              style={{ fontSize: `${box.fontSize}px` }}
-                              onFocus={() => activateTextBox(box.id)}
-                              onClick={() => activateTextBox(box.id)}
-                              onChange={(event) =>
-                                updateTextBox(box.id, event.target.value)
-                              }
-                            />
+                                <textarea
+                                  className="text-box-input"
+                                  aria-label={`Text box ${box.id} content`}
+                                  placeholder="Type here..."
+                                  value={box.text}
+                                  rows={2}
+                                  style={{ fontSize: `${box.fontSize}px` }}
+                                  onFocus={() => activateTextBox(box.id)}
+                                  onClick={() => activateTextBox(box.id)}
+                                  onChange={(event) =>
+                                    updateTextBox(box.id, event.target.value)
+                                  }
+                                />
 
-                            <div
-                              className="text-box-resize-handle"
-                              title="Resize text box"
-                              role="presentation"
-                              onPointerDown={(event) =>
-                                handleResizeStart(event, box)
-                              }
-                              onPointerMove={(event) =>
-                                handleResizeMove(event, box.id)
-                              }
-                              onPointerUp={() => setResizeStart(null)}
-                              onPointerCancel={() => setResizeStart(null)}
-                            />
-                          </div>
-                        ))}
+                                <div
+                                  className="text-box-resize-handle"
+                                  title="Resize text box"
+                                  role="presentation"
+                                  onPointerDown={(event) =>
+                                    handleResizeStart(event, box)
+                                  }
+                                  onPointerMove={(event) =>
+                                    handleResizeMove(event, box)
+                                  }
+                                  onPointerUp={() => setResizeStart(null)}
+                                  onPointerCancel={() => setResizeStart(null)}
+                                />
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+
+                      <div className="pdf-page-label">
+                        Page {pageNumber} of {pageCount}
+                        {textBoxCountForPage(pageNumber) > 0 &&
+                          ` · ${textBoxCountForPage(pageNumber)} text ${textBoxCountForPage(pageNumber) === 1 ? 'box' : 'boxes'}`}
                       </div>
                     </div>
-
-                    <div className="pdf-page-label">
-                      {pageCount > 0
-                        ? `Page 1 of ${pageCount}`
-                        : 'Loading PDF...'}
-                    </div>
-                  </>
+                  ))
+                ) : (
+                  <div className="loading-message">Loading PDF pages...</div>
                 )}
 
                 <button
-                  className="button button-secondary"
+                  className="button button-secondary choose-another-button"
                   onClick={openFilePicker}
                 >
                   Choose another PDF
@@ -708,7 +916,11 @@ function App() {
             ) : (
               <div className="upload-card">
                 <div className="upload-icon">
-                  <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 48 48"
+                    fill="none"
+                    aria-hidden="true"
+                  >
                     <path
                       d="M12 5.5h16l9 9v27H12a3 3 0 0 1-3-3v-30a3 3 0 0 1 3-3Z"
                       stroke="currentColor"
@@ -765,7 +977,7 @@ function App() {
               <span className="status-dot" />
               All changes stay local
             </span>
-            <span>PDF Text Editor · Preview build</span>
+            <span>PDF Text Editor · Multi-page preview</span>
           </footer>
         </section>
       </div>
