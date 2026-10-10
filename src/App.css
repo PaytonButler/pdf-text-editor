@@ -487,7 +487,6 @@
 }
 
 /* Independent text-box overlay */
-
 .text-placement-mode {
   cursor: crosshair;
 }
@@ -698,5 +697,133 @@
   .workspace-breadcrumb>span:first-child,
   .breadcrumb-separator {
     display: none;
+  }
+}
+
+/* Updated editor controls and export action */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+/* Text-box selection and editing states */
+.text-box {
+  box-sizing: border-box;
+  min-width: 90px;
+  min-height: 38px;
+  overflow: visible;
+}
+
+.text-box.unactivated {
+  border: 1px solid #111;
+  background: transparent;
+}
+
+.text-box.unactivated:hover,
+.text-box.unactivated.selected {
+  border-color: #111;
+  background: rgb(255 255 255 / 12%);
+}
+
+.text-box.activated {
+  border-color: transparent;
+  background: transparent;
+}
+
+.text-box.activated:hover,
+.text-box.activated.selected {
+  border-color: rgb(102 125 87 / 75%);
+  background: rgb(255 255 255 / 18%);
+}
+
+.text-box-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 3px;
+  overflow: auto;
+  resize: none;
+  font-family: Arial, sans-serif;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.text-box-input::placeholder {
+  color: transparent;
+}
+
+.text-box:hover .text-box-input::placeholder,
+.text-box.selected .text-box-input::placeholder {
+  color: #a2a39a;
+}
+
+.text-box-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 4;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #667d57;
+  border-radius: 3px;
+  background: #fff;
+  cursor: nwse-resize;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+}
+
+.text-box:hover .text-box-resize-handle,
+.text-box.selected .text-box-resize-handle {
+  opacity: 1;
+}
+
+.text-box-resize-handle::before,
+.text-box-resize-handle::after {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  content: "";
+  border-right: 1px solid #667d57;
+  border-bottom: 1px solid #667d57;
+}
+
+.text-box-resize-handle::before {
+  width: 5px;
+  height: 5px;
+}
+
+.text-box-resize-handle::after {
+  width: 8px;
+  height: 8px;
+}
+
+.text-box-drag-handle {
+  z-index: 2;
+}
+
+.text-box-delete {
+  z-index: 5;
+}
+
+@media (max-width: 760px) {
+  .topbar-actions {
+    gap: 5px;
+  }
+
+  .topbar-actions .button {
+    min-height: 35px;
+    padding: 0 9px;
+    font-size: 10px;
   }
 }
