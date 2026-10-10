@@ -1,16 +1,24 @@
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import './App.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 type Tool = 'select' | 'text'
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [activeTool, setActiveTool] = useState<Tool>('select')
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState('')
+  const [renderError, setRenderError] = useState('')
+  const [pageCount, setPageCount] = useState(0)
 
   function loadFile(file: File | undefined) {
     if (!file) return
@@ -42,6 +50,77 @@ function App() {
     fileInputRef.current?.click()
   }
 
+  useEffect(() => {
+    if (!selectedFile) {
+      setPageCount(0)
+      setRenderError('')
+      return
+    }
+
+    let cancelled = false
+    let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | undefined
+
+    async function renderPdf() {
+      try {
+        setRenderError('')
+        setPageCount(0)
+
+        const file = selectedFile
+
+        if (!file) return
+
+        const bytes = new Uint8Array(
+          await file.arrayBuffer(),
+        )
+
+        if (cancelled) return
+
+        loadingTask = pdfjsLib.getDocument({ data: bytes })
+        const pdf = await loadingTask.promise
+
+        if (cancelled) return
+
+        setPageCount(pdf.numPages)
+
+        const page = await pdf.getPage(1)
+
+        if (cancelled) return
+
+        const canvas = canvasRef.current
+        const context = canvas?.getContext('2d')
+
+        if (!canvas || !context) {
+          throw new Error('Could not create the PDF canvas.')
+        }
+
+        const viewport = page.getViewport({ scale: 1.25 })
+
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+
+        await page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+        }).promise
+      } catch (err) {
+        if (!cancelled) {
+          console.error('PDF rendering failed:', err)
+          setRenderError(
+            'Could not display this PDF. Try another PDF file.',
+          )
+        }
+      }
+    }
+
+    void renderPdf()
+
+    return () => {
+      cancelled = true
+      void loadingTask?.destroy()
+    }
+  }, [selectedFile])
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -60,7 +139,10 @@ function App() {
           </span>
         </div>
 
-        <button className="button button-primary" onClick={openFilePicker}>
+        <button
+          className="button button-primary"
+          onClick={openFilePicker}
+        >
           <span aria-hidden="true">↑</span>
           Open PDF
         </button>
@@ -105,7 +187,9 @@ function App() {
           <div className="sidebar-info">
             <span className="info-icon" aria-hidden="true">▤</span>
             <div>
-              <strong>{selectedFile ? 'PDF selected' : 'No document'}</strong>
+              <strong>
+                {selectedFile ? 'PDF selected' : 'No document'}
+              </strong>
               <p>
                 {selectedFile
                   ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`
@@ -160,15 +244,29 @@ function App() {
             onDrop={handleDrop}
           >
             {selectedFile ? (
-              <div className="empty-document">
-                <div className="pdf-preview-icon">PDF</div>
-                <h2>Your document is ready</h2>
-                <p>
-                  <strong>{selectedFile.name}</strong> has been selected.
-                </p>
-                <p className="muted">
-                  PDF page rendering is our next step.
-                </p>
+              <div className="pdf-viewer">
+                {renderError ? (
+                  <div className="pdf-render-error" role="alert">
+                    {renderError}
+                  </div>
+                ) : (
+                  <>
+                    <div className="pdf-page">
+                      <canvas
+                        ref={canvasRef}
+                        className="pdf-canvas"
+                        aria-label="First page of the selected PDF"
+                      />
+                    </div>
+
+                    <div className="pdf-page-label">
+                      {pageCount > 0
+                        ? `Page 1 of ${pageCount}`
+                        : 'Loading PDF...'}
+                    </div>
+                  </>
+                )}
+
                 <button
                   className="button button-secondary"
                   onClick={openFilePicker}
