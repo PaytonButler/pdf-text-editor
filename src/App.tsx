@@ -1,3 +1,4 @@
+
 import {
   useCallback,
   useEffect,
@@ -11,13 +12,14 @@ import type {
   MouseEvent,
 } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
-import { PDFDocument, StandardFonts } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import './App.css'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 type Tool = 'select' | 'text'
+type TextFont = 'Helvetica' | 'TimesRoman' | 'Courier' | 'Cursive'
 
 type TextBox = {
   id: number
@@ -28,6 +30,10 @@ type TextBox = {
   height: number
   text: string
   fontSize: number
+  fontFamily: TextFont
+  bold: boolean
+  italic: boolean
+  color: string
   activated: boolean
 }
 
@@ -61,7 +67,9 @@ function PdfPageCanvas({ pdf, pageNumber, onPageReady }: PdfPageProps) {
 
   useEffect(() => {
     let cancelled = false
-    let renderTask: pdfjsLib.RenderTask | undefined
+    let renderTask:
+      | ReturnType<Awaited<ReturnType<typeof pdf.getPage>>['render']>
+      | undefined
 
     async function renderPage() {
       try {
@@ -136,6 +144,8 @@ function App() {
   const [renderError, setRenderError] = useState('')
   const [pageCount, setPageCount] = useState(0)
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([])
+  const [defaultFontFamily, setDefaultFontFamily] =
+    useState<TextFont>('Helvetica')
   const [selectedBoxId, setSelectedBoxId] = useState<number | null>(null)
   const [dragStart, setDragStart] = useState<DragStart | null>(null)
   const [resizeStart, setResizeStart] = useState<ResizeStart | null>(null)
@@ -159,13 +169,17 @@ function App() {
         height: 58,
         text: '',
         fontSize: 15,
+        fontFamily: defaultFontFamily,
+        bold: false,
+        italic: false,
+        color: '#252621',
         activated: false,
       }
 
       setTextBoxes((current) => [...current, newBox])
       setSelectedBoxId(id)
     },
-    [],
+    [defaultFontFamily],
   )
 
   const registerPageElement = useCallback(
@@ -271,29 +285,51 @@ function App() {
     setPageToJump('1')
   }
 
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    loadFile(event.target.files?.[0])
+    const file = event.target.files?.[0]
+
+    if (file) {
+      setTextBoxes([])
+      setSelectedBoxId(null)
+      setDragStart(null)
+      setResizeStart(null)
+      nextTextBoxId.current = 1
+    }
+
+    loadFile(file)
     event.target.value = ''
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setIsDragging(false)
-    loadFile(event.dataTransfer.files[0])
+
+    const file = event.dataTransfer.files[0]
+
+    if (file) {
+      setTextBoxes([])
+      setSelectedBoxId(null)
+      setDragStart(null)
+      setResizeStart(null)
+      nextTextBoxId.current = 1
+    }
+
+    loadFile(file)
   }
+
 
   function openFilePicker() {
     fileInputRef.current?.click()
   }
 
   useEffect(() => {
-    if (!selectedFile) {
-      setPdfDocument(null)
-      setPageCount(0)
+    const file = selectedFile
+
+    if (!file) {
       return
     }
 
-    const file = selectedFile
     let cancelled = false
     let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | undefined
 
@@ -301,12 +337,14 @@ function App() {
       try {
         setRenderError('')
 
-        const bytes = new Uint8Array(await file.arrayBuffer())
+        const fileBytes = await file!.arrayBuffer()
+        const bytes = new Uint8Array(fileBytes)
+
         if (cancelled) return
 
         loadingTask = pdfjsLib.getDocument({ data: bytes })
-
         const pdf = await loadingTask.promise
+
         if (cancelled) return
 
         setPdfDocument(pdf)
@@ -326,14 +364,6 @@ function App() {
       cancelled = true
       void loadingTask?.destroy()
     }
-  }, [selectedFile])
-
-  useEffect(() => {
-    setTextBoxes([])
-    setSelectedBoxId(null)
-    setDragStart(null)
-    setResizeStart(null)
-    nextTextBoxId.current = 1
   }, [selectedFile])
 
   function handlePageClick(
@@ -364,7 +394,6 @@ function App() {
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
-
     setSelectedBoxId(box.id)
 
     setDragStart({
@@ -387,10 +416,8 @@ function App() {
     if (!page) return
 
     const rect = page.getBoundingClientRect()
-    const deltaX =
-      ((event.clientX - dragStart.pointerX) / rect.width) * 100
-    const deltaY =
-      ((event.clientY - dragStart.pointerY) / rect.height) * 100
+    const deltaX = ((event.clientX - dragStart.pointerX) / rect.width) * 100
+    const deltaY = ((event.clientY - dragStart.pointerY) / rect.height) * 100
 
     setTextBoxes((current) =>
       current.map((item) => {
@@ -424,7 +451,6 @@ function App() {
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
-
     setSelectedBoxId(box.id)
 
     setResizeStart({
@@ -473,6 +499,31 @@ function App() {
     )
   }
 
+  function updateTextBoxStyle<
+    K extends 'fontSize' | 'fontFamily' | 'bold' | 'italic' | 'color',
+  >(id: number, key: K, value: TextBox[K]) {
+    if (key === 'fontFamily') {
+      const family = value as TextFont
+      setDefaultFontFamily(family)
+
+      setTextBoxes((current) =>
+        current.map((box) =>
+          box.id === id || !box.text.trim()
+            ? { ...box, fontFamily: family }
+            : box,
+        ),
+      )
+
+      return
+    }
+
+    setTextBoxes((current) =>
+      current.map((box) =>
+        box.id === id ? { ...box, [key]: value } : box,
+      ),
+    )
+  }
+
   function updateTextBox(id: number, text: string) {
     setTextBoxes((current) =>
       current.map((box) =>
@@ -514,39 +565,87 @@ function App() {
   }
 
   async function exportPdf() {
-    const file = selectedFile
-    if (!file || isExporting) return
+    if (selectedFile === null) {
+      setError('Please open a PDF before exporting.')
+      return
+    }
+
+    if (isExporting) return
+
+    // Keep a non-null local reference for the entire asynchronous export.
+    const file: File = selectedFile
 
     setIsExporting(true)
     setError('')
 
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer())
+      // Explicit non-null assertion prevents TS18047 if the editor's
+      // TypeScript control-flow analysis still reports the earlier warning.
+      const fileBytes = await file!.arrayBuffer()
+      const bytes = new Uint8Array(fileBytes)
+
       const pdfDoc = await PDFDocument.load(bytes)
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+      const embeddedFonts = new Map<
+        string,
+        Awaited<ReturnType<typeof pdfDoc.embedFont>>
+      >()
 
-      for (const box of textBoxes) {
-        if (!box.text.trim()) continue
+      async function getFont(box: TextBox) {
+        const family =
+          box.fontFamily === 'Cursive' ? 'Helvetica' : box.fontFamily
 
-        const page = pdfDoc.getPage(box.pageNumber - 1)
-        const pageElement = pageElements.current.get(box.pageNumber)
-        if (!pageElement) continue
+        const style = box.bold && box.italic
+          ? 'boldItalic'
+          : box.bold
+            ? 'bold'
+            : box.italic
+              ? 'italic'
+              : 'regular'
 
-        const rect = pageElement.getBoundingClientRect()
-        if (rect.width <= 0 || rect.height <= 0) continue
+        const key = `${family}-${style}`
 
-        const pageSize = page.getSize()
-        const pointsPerCssPixel = pageSize.height / rect.height
-        const padding = 3 * pointsPerCssPixel
-        const fontSize = Math.max(1, box.fontSize * pointsPerCssPixel)
-        const boxWidth = Math.max(
-          1,
-          box.width * pointsPerCssPixel - padding * 2,
-        )
-        const lineHeight = fontSize * 1.25
+        const fontNames: Record<
+          Exclude<TextFont, 'Cursive'>,
+          Record<string, string>
+        > = {
+          Helvetica: {
+            regular: StandardFonts.Helvetica,
+            bold: StandardFonts.HelveticaBold,
+            italic: StandardFonts.HelveticaOblique,
+            boldItalic: StandardFonts.HelveticaBoldOblique,
+          },
+          TimesRoman: {
+            regular: StandardFonts.TimesRoman,
+            bold: StandardFonts.TimesRomanBold,
+            italic: StandardFonts.TimesRomanItalic,
+            boldItalic: StandardFonts.TimesRomanBoldItalic,
+          },
+          Courier: {
+            regular: StandardFonts.Courier,
+            bold: StandardFonts.CourierBold,
+            italic: StandardFonts.CourierOblique,
+            boldItalic: StandardFonts.CourierBoldOblique,
+          },
+        }
+
+        if (!embeddedFonts.has(key)) {
+          const fontName =
+            fontNames[family as Exclude<TextFont, 'Cursive'>][style]
+
+          embeddedFonts.set(key, await pdfDoc.embedFont(fontName as never))
+        }
+
+        return embeddedFonts.get(key)!
+      }
+
+      function wrapText(
+        text: string,
+        maxWidth: number,
+        measure: (text: string) => number,
+      ) {
         const lines: string[] = []
 
-        for (const paragraph of box.text.split('\n')) {
+        for (const paragraph of text.split('\n')) {
           const words = paragraph.split(/\s+/).filter(Boolean)
 
           if (words.length === 0) {
@@ -559,10 +658,7 @@ function App() {
           for (const word of words) {
             const candidate = line ? `${line} ${word}` : word
 
-            if (
-              line &&
-              font.widthOfTextAtSize(candidate, fontSize) > boxWidth
-            ) {
+            if (line && measure(candidate) > maxWidth) {
               lines.push(line)
               line = word
             } else {
@@ -573,11 +669,90 @@ function App() {
           lines.push(line)
         }
 
+        return lines
+      }
+
+      for (const box of textBoxes) {
+        if (!box.text.trim()) continue
+
+        const page = pdfDoc.getPage(box.pageNumber - 1)
+        const pageElement = pageElements.current.get(box.pageNumber)
+
+        if (!pageElement) continue
+
+        const rect = pageElement.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) continue
+
+        const pageSize = page.getSize()
+        const scale = pageSize.height / rect.height
+        const padding = 3 * scale
+        const fontSize = Math.max(1, box.fontSize * scale)
+        const boxWidth = Math.max(1, box.width * scale - padding * 2)
+        const lineHeight = fontSize * 1.25
         const x = (box.x / 100) * pageSize.width + padding
+
+        const hex = /^#([0-9a-f]{6})$/i.test(box.color)
+          ? box.color.slice(1)
+          : '252621'
+
+        const textColor = rgb(
+          Number.parseInt(hex.slice(0, 2), 16) / 255,
+          Number.parseInt(hex.slice(2, 4), 16) / 255,
+          Number.parseInt(hex.slice(4, 6), 16) / 255,
+        )
+
+        if (box.fontFamily === 'Cursive') {
+          const rasterScale = 3
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.ceil(box.width * rasterScale))
+          canvas.height = Math.max(1, Math.ceil(box.height * rasterScale))
+
+          const context = canvas.getContext('2d')
+          if (!context) continue
+
+          context.scale(rasterScale, rasterScale)
+          context.font = `${box.italic ? 'italic ' : ''}${box.bold ? 'bold ' : ''}${box.fontSize}px "Segoe Script", "Brush Script MT", "Apple Chancery", cursive`
+          context.textBaseline = 'top'
+          context.fillStyle = box.color
+
+          const lines = wrapText(
+            box.text,
+            Math.max(1, box.width - 6),
+            (text) => context.measureText(text).width,
+          )
+
+          let lineY = 2
+
+          for (const line of lines) {
+            if (lineY + box.fontSize > box.height) break
+            context.fillText(line, 3, lineY)
+            lineY += box.fontSize * 1.25
+          }
+
+          const image = await pdfDoc.embedPng(canvas.toDataURL('image/png'))
+
+          page.drawImage(image, {
+            x: (box.x / 100) * pageSize.width,
+            y:
+              pageSize.height -
+              (box.y / 100) * pageSize.height -
+              box.height * scale,
+            width: box.width * scale,
+            height: box.height * scale,
+          })
+
+          continue
+        }
+
+        const font = await getFont(box)
+        const lines = wrapText(
+          box.text,
+          boxWidth,
+          (text) => font.widthOfTextAtSize(text, fontSize),
+        )
+
         let y =
-          pageSize.height -
-          (box.y / 100) * pageSize.height -
-          fontSize
+          pageSize.height - (box.y / 100) * pageSize.height - fontSize
 
         for (const line of lines) {
           if (y < 0) break
@@ -587,6 +762,7 @@ function App() {
             y,
             size: fontSize,
             font,
+            color: textColor,
           })
 
           y -= lineHeight
@@ -603,6 +779,7 @@ function App() {
 
       link.href = url
       link.download = `${baseName}-edited.pdf`
+
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -763,6 +940,112 @@ function App() {
             )}
           </div>
 
+          {(() => {
+            const selectedBox = textBoxes.find(
+              (box) => box.id === selectedBoxId,
+            )
+
+            return selectedBox ? (
+              <div
+                className="text-format-toolbar"
+                aria-label="Text formatting"
+              >
+                <label className="format-control font-size-control">
+                  Size
+                  <input
+                    aria-label="Font size"
+                    type="number"
+                    min={6}
+                    max={96}
+                    value={selectedBox.fontSize}
+                    onChange={(event) =>
+                      updateTextBoxStyle(
+                        selectedBox.id,
+                        'fontSize',
+                        Math.max(
+                          6,
+                          Math.min(96, Number(event.target.value) || 6),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+
+                <label className="format-control font-family-control">
+                  Font
+                  <select
+                    aria-label="Font family"
+                    value={selectedBox.fontFamily}
+                    onChange={(event) =>
+                      updateTextBoxStyle(
+                        selectedBox.id,
+                        'fontFamily',
+                        event.target.value as TextFont,
+                      )
+                    }
+                  >
+                    <option value="Helvetica">Arial / Helvetica</option>
+                    <option value="TimesRoman">Times New Roman</option>
+                    <option value="Courier">Courier</option>
+                    <option value="Cursive">Cursive / Signature</option>
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  className={`format-toggle ${selectedBox.bold ? 'active' : ''}`}
+                  aria-pressed={selectedBox.bold}
+                  onClick={() =>
+                    updateTextBoxStyle(
+                      selectedBox.id,
+                      'bold',
+                      !selectedBox.bold,
+                    )
+                  }
+                  title="Bold"
+                >
+                  <strong>B</strong>
+                </button>
+
+                <button
+                  type="button"
+                  className={`format-toggle ${selectedBox.italic ? 'active' : ''}`}
+                  aria-pressed={selectedBox.italic}
+                  onClick={() =>
+                    updateTextBoxStyle(
+                      selectedBox.id,
+                      'italic',
+                      !selectedBox.italic,
+                    )
+                  }
+                  title="Italic"
+                >
+                  <em>I</em>
+                </button>
+
+                <label className="format-color-control" title="Text color">
+                  Color
+                  <input
+                    aria-label="Text color"
+                    type="color"
+                    value={selectedBox.color}
+                    onChange={(event) =>
+                      updateTextBoxStyle(
+                        selectedBox.id,
+                        'color',
+                        event.target.value,
+                      )
+                    }
+                  />
+                </label>
+
+                <span className="format-selection-label">
+                  Box {selectedBox.id}
+                </span>
+              </div>
+            ) : null
+          })()}
+
           <div
             className={`canvas-area ${isDragging ? 'dragging' : ''}`}
             onDragOver={(event) => {
@@ -787,121 +1070,133 @@ function App() {
                     {renderError}
                   </div>
                 ) : pdfDocument ? (
-                  Array.from(
-                    { length: pageCount },
-                    (_, index) => index + 1,
-                  ).map((pageNumber) => (
-                    <div
-                      className="pdf-page-wrap"
-                      key={`${selectedFile.name}-${pageNumber}`}
-                    >
+                  Array.from({ length: pageCount }, (_, index) => index + 1).map(
+                    (pageNumber) => (
                       <div
-                        ref={(element) =>
-                          registerPageElement(pageNumber, element)
-                        }
-                        className={`pdf-page ${activeTool === 'text' ? 'text-placement-mode' : ''}`}
-                        onClick={(event) =>
-                          handlePageClick(pageNumber, event)
-                        }
-                        data-page-number={pageNumber}
-                        data-rendered-width={pageDimensions[pageNumber]?.width}
-                        data-rendered-height={pageDimensions[pageNumber]?.height}
+                        className="pdf-page-wrap"
+                        key={`${selectedFile.name}-${pageNumber}`}
                       >
-                        <PdfPageCanvas
-                          pdf={pdfDocument}
-                          pageNumber={pageNumber}
-                          onPageReady={handlePageReady}
-                        />
+                        <div
+                          ref={(element) =>
+                            registerPageElement(pageNumber, element)
+                          }
+                          className={`pdf-page ${activeTool === 'text' ? 'text-placement-mode' : ''}`}
+                          onClick={(event) =>
+                            handlePageClick(pageNumber, event)
+                          }
+                          data-page-number={pageNumber}
+                          data-rendered-width={pageDimensions[pageNumber]?.width}
+                          data-rendered-height={pageDimensions[pageNumber]?.height}
+                        >
+                          <PdfPageCanvas
+                            pdf={pdfDocument}
+                            pageNumber={pageNumber}
+                            onPageReady={handlePageReady}
+                          />
 
-                        <div className="text-box-layer">
-                          {textBoxes
-                            .filter((box) => box.pageNumber === pageNumber)
-                            .map((box) => (
-                              <div
-                                key={box.id}
-                                className={[
-                                  'text-box',
-                                  box.activated ? 'activated' : 'unactivated',
-                                  selectedBoxId === box.id ? 'selected' : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ')}
-                                style={{
-                                  left: `${box.x}%`,
-                                  top: `${box.y}%`,
-                                  width: `${box.width}px`,
-                                  height: `${box.height}px`,
-                                }}
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  setSelectedBoxId(box.id)
-                                }}
-                              >
+                          <div className="text-box-layer">
+                            {textBoxes
+                              .filter((box) => box.pageNumber === pageNumber)
+                              .map((box) => (
                                 <div
-                                  className="text-box-drag-handle"
-                                  title="Drag to move this text box"
-                                  onPointerDown={(event) =>
-                                    handleDragStart(event, box)
-                                  }
-                                  onPointerMove={(event) =>
-                                    handleDragMove(event, box)
-                                  }
-                                  onPointerUp={() => setDragStart(null)}
-                                  onPointerCancel={() => setDragStart(null)}
-                                />
-
-                                <button
-                                  type="button"
-                                  className="text-box-delete"
-                                  aria-label={`Delete text box ${box.id}`}
-                                  title="Delete text box"
+                                  key={box.id}
+                                  className={[
+                                    'text-box',
+                                    box.activated ? 'activated' : 'unactivated',
+                                    selectedBoxId === box.id ? 'selected' : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' ')}
+                                  style={{
+                                    left: `${box.x}%`,
+                                    top: `${box.y}%`,
+                                    width: `${box.width}px`,
+                                    height: `${box.height}px`,
+                                  }}
                                   onClick={(event) => {
                                     event.stopPropagation()
-                                    deleteTextBox(box.id)
+                                    setSelectedBoxId(box.id)
                                   }}
                                 >
-                                  ×
-                                </button>
+                                  <div
+                                    className="text-box-drag-handle"
+                                    title="Drag to move this text box"
+                                    onPointerDown={(event) =>
+                                      handleDragStart(event, box)
+                                    }
+                                    onPointerMove={(event) =>
+                                      handleDragMove(event, box)
+                                    }
+                                    onPointerUp={() => setDragStart(null)}
+                                    onPointerCancel={() => setDragStart(null)}
+                                  />
 
-                                <textarea
-                                  className="text-box-input"
-                                  aria-label={`Text box ${box.id} content`}
-                                  placeholder="Type here..."
-                                  value={box.text}
-                                  rows={2}
-                                  style={{ fontSize: `${box.fontSize}px` }}
-                                  onFocus={() => activateTextBox(box.id)}
-                                  onClick={() => activateTextBox(box.id)}
-                                  onChange={(event) =>
-                                    updateTextBox(box.id, event.target.value)
-                                  }
-                                />
+                                  <button
+                                    type="button"
+                                    className="text-box-delete"
+                                    aria-label={`Delete text box ${box.id}`}
+                                    title="Delete text box"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      deleteTextBox(box.id)
+                                    }}
+                                  >
+                                    ×
+                                  </button>
 
-                                <div
-                                  className="text-box-resize-handle"
-                                  title="Resize text box"
-                                  role="presentation"
-                                  onPointerDown={(event) =>
-                                    handleResizeStart(event, box)
-                                  }
-                                  onPointerMove={(event) =>
-                                    handleResizeMove(event, box)
-                                  }
-                                  onPointerUp={() => setResizeStart(null)}
-                                  onPointerCancel={() => setResizeStart(null)}
-                                />
-                              </div>
-                            ))}
+                                  <textarea
+                                    className="text-box-input"
+                                    aria-label={`Text box ${box.id} content`}
+                                    placeholder="Type here..."
+                                    value={box.text}
+                                    rows={2}
+                                    style={{
+                                      fontSize: `${box.fontSize}px`,
+                                      fontFamily:
+                                        box.fontFamily === 'TimesRoman'
+                                          ? '"Times New Roman", serif'
+                                          : box.fontFamily === 'Courier'
+                                            ? '"Courier New", monospace'
+                                            : box.fontFamily === 'Cursive'
+                                              ? '"Segoe Script", "Brush Script MT", "Apple Chancery", cursive'
+                                              : 'Arial, sans-serif',
+                                      fontWeight: box.bold ? 700 : 400,
+                                      fontStyle: box.italic ? 'italic' : 'normal',
+                                      color: box.color,
+                                    }}
+                                    onFocus={() => activateTextBox(box.id)}
+                                    onClick={() => activateTextBox(box.id)}
+                                    onChange={(event) =>
+                                      updateTextBox(box.id, event.target.value)
+                                    }
+                                  />
+
+                                  <div
+                                    className="text-box-resize-handle"
+                                    title="Resize text box"
+                                    role="presentation"
+                                    onPointerDown={(event) =>
+                                      handleResizeStart(event, box)
+                                    }
+                                    onPointerMove={(event) =>
+                                      handleResizeMove(event, box)
+                                    }
+                                    onPointerUp={() => setResizeStart(null)}
+                                    onPointerCancel={() => setResizeStart(null)}
+                                  />
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+
+                        <div className="pdf-page-label">
+                          Page {pageNumber} of {pageCount}
+                          {textBoxCountForPage(pageNumber) > 0 &&
+                            ` · ${textBoxCountForPage(pageNumber)} text ${textBoxCountForPage(pageNumber) === 1 ? 'box' : 'boxes'}`}
                         </div>
                       </div>
-
-                      <div className="pdf-page-label">
-                        Page {pageNumber} of {pageCount}
-                        {textBoxCountForPage(pageNumber) > 0 &&
-                          ` · ${textBoxCountForPage(pageNumber)} text ${textBoxCountForPage(pageNumber) === 1 ? 'box' : 'boxes'}`}
-                      </div>
-                    </div>
-                  ))
+                    ),
+                  )
                 ) : (
                   <div className="loading-message">Loading PDF pages...</div>
                 )}
@@ -916,11 +1211,7 @@ function App() {
             ) : (
               <div className="upload-card">
                 <div className="upload-icon">
-                  <svg
-                    viewBox="0 0 48 48"
-                    fill="none"
-                    aria-hidden="true"
-                  >
+                  <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
                     <path
                       d="M12 5.5h16l9 9v27H12a3 3 0 0 1-3-3v-30a3 3 0 0 1 3-3Z"
                       stroke="currentColor"
