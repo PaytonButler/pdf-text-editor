@@ -130,6 +130,8 @@ function PdfPageCanvas({ pdf, pageNumber, onPageReady }: PdfPageProps) {
 }
 
 function App() {
+  const textBoxInputRefs = useRef<Map<number, HTMLTextAreaElement>>(new Map())
+  const pendingFocusBoxId = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const nextTextBoxId = useRef(1)
   const pageElements = useRef<Map<number, HTMLDivElement>>(new Map())
@@ -176,6 +178,7 @@ function App() {
         activated: false,
       }
 
+      pendingFocusBoxId.current = id
       setTextBoxes((current) => [...current, newBox])
       setSelectedBoxId(id)
     },
@@ -322,6 +325,17 @@ function App() {
   function openFilePicker() {
     fileInputRef.current?.click()
   }
+
+  useEffect(() => {
+    const id = pendingFocusBoxId.current
+    if (id === null) return
+
+    const textarea = textBoxInputRefs.current.get(id)
+    if (!textarea) return
+
+    textarea.focus()
+    pendingFocusBoxId.current = null
+  }, [textBoxes])
 
   useEffect(() => {
     const file = selectedFile
@@ -1145,6 +1159,13 @@ function App() {
                                   </button>
 
                                   <textarea
+                                    ref={(element) => {
+                                      if (element) {
+                                        textBoxInputRefs.current.set(box.id, element)
+                                      } else {
+                                        textBoxInputRefs.current.delete(box.id)
+                                      }
+                                    }}
                                     className="text-box-input"
                                     aria-label={`Text box ${box.id} content`}
                                     placeholder="Type here..."
